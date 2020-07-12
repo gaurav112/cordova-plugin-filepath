@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+import android.support.v4.app.ActivityCompat;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaInterface;
@@ -27,6 +28,14 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.List;
 import java.io.File;
+
+import java.io.IOException;
+import java.io.OutputStream;
+
+import android.content.pm.ApplicationInfo;
+
+
+import org.apache.commons.io.IOUtils;
 
 public class FilePath extends CordovaPlugin {
 
@@ -69,7 +78,6 @@ public class FilePath extends CordovaPlugin {
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) throws JSONException {
         this.callback = callbackContext;
         this.uriStr = args.getString(0);
-
         if (action.equals("resolveNativePath")) {
             if (PermissionHelper.hasPermission(this, READ)) {
                 resolveNativePath();
@@ -96,11 +104,18 @@ public class FilePath extends CordovaPlugin {
         JSONObject resultObj = new JSONObject();
         /* content:///... */
         Uri pvUrl = Uri.parse(this.uriStr);
-
         Log.d(TAG, "URI: " + this.uriStr);
 
         Context appContext = this.cordova.getActivity().getApplicationContext();
-        String filePath = getPath(appContext, pvUrl);
+        String filePath;
+
+        final boolean isNougat = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N;
+
+        if(isNougat) {
+            filePath = getFilePathFromURI(appContext, pvUrl);
+        } else {
+            filePath = getPath(appContext, pvUrl);
+        }
 
         //check result; send error/success callback
         if (filePath == GET_PATH_ERROR_ID) {
@@ -120,6 +135,60 @@ public class FilePath extends CordovaPlugin {
 
             this.callback.success("file://" + filePath);
         }
+    }
+
+    public static String getFilePathFromURI(Context context, Uri contentUri) {
+        //copy file and send new file path
+        String fileName = getFileName(contentUri);
+        if (!TextUtils.isEmpty(fileName)) {
+            File folder = new File (Environment.getExternalStorageDirectory().getPath() +
+                    File.separator +  getApplicationName(context));
+
+            boolean success = true;
+
+            if (!folder.exists()) {
+                success = folder.mkdirs();
+            }
+
+            if (success) {
+                File copyFile = new File(Environment.getExternalStorageDirectory().getPath() +
+                        File.separator +  getApplicationName(context) + File.separator + fileName);
+                copy(context, contentUri, copyFile);
+                return copyFile.getAbsolutePath();
+            }
+
+        }
+        return null;
+    }
+
+    public static String getFileName(Uri uri) {
+        if (uri == null) return null;
+        String fileName = null;
+        String path = uri.getPath();
+        int cut = path.lastIndexOf('/');
+        if (cut != -1) {
+            fileName = path.substring(cut + 1);
+        }
+        return fileName;
+    }
+
+    public static void copy(Context context, Uri srcUri, File dstFile) {
+        try {
+            InputStream inputStream = context.getContentResolver().openInputStream(srcUri);
+            if (inputStream == null) return;
+            OutputStream outputStream = new FileOutputStream(dstFile);
+            IOUtils.copy(inputStream, outputStream);
+            inputStream.close();
+            outputStream.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static String getApplicationName(Context context) {
+        ApplicationInfo applicationInfo = context.getApplicationInfo();
+        int stringId = applicationInfo.labelRes;
+        return stringId == 0 ? applicationInfo.nonLocalizedLabel.toString() : context.getString(stringId);
     }
 
     public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) throws JSONException {
@@ -179,14 +248,6 @@ public class FilePath extends CordovaPlugin {
      */
     private static boolean isGoogleDriveUri(Uri uri) {
         return "com.google.android.apps.docs.storage".equals(uri.getAuthority()) || "com.google.android.apps.docs.storage.legacy".equals(uri.getAuthority());
-    }
-    
-    /**
-     * @param uri The Uri to check.
-     * @return Whether the Uri authority is One Drive.
-     */
-    private static boolean isOneDriveUri(Uri uri) {
-        return "com.microsoft.skydrive.content.external".equals(uri.getAuthority());
     }
 
     /**
@@ -403,7 +464,7 @@ public class FilePath extends CordovaPlugin {
                 }
             }
 
-            if(isGoogleDriveUri(uri) || isOneDriveUri(uri)){
+            if(isGoogleDriveUri(uri)){
                 return getDriveFilePath(uri,context);
             }
 
